@@ -6,7 +6,7 @@ from tcp import Servidor
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-# Dicionário global para mapear apelido (em minúsculas) -> objeto conexao
+#dicionário global para mapear apelido (em minúsculas) -> objeto conexao
 USUARIOS = {}
 CANAIS = {}  # canal_lower -> set(conexao1, conexao2, ...)
 
@@ -26,14 +26,14 @@ def dados_recebidos(conexao, dados):
         linha, conexao.buffer = conexao.buffer.split(b'\r\n', 1)
         texto = linha.decode('utf-8', errors='ignore').strip()
 
-        # Passo 1 & 2: PING
+        #passo 1 & 2: PING
         if texto.startswith('PING'):
             partes = texto.split(' ', 1)
             payload = partes[1] if len(partes) > 1 else ''
             resposta = f":server PONG server :{payload}\r\n"
             conexao.enviar(resposta.encode('utf-8'))
 
-        # Passo 3 & 4: NICK
+        #passo 3 & 4: NICK
         elif texto.startswith('NICK'):
             partes = texto.split(' ', 1)
             apelido = partes[1] if len(partes) > 1 else ''
@@ -62,7 +62,7 @@ def dados_recebidos(conexao, dados):
                     conexao.apelido = apelido
                     USUARIOS[apelido_lower] = conexao
 
-                 # Passo 5: PRIVMSG (Direto ou Canal)
+                 #passo 5: PRIVMSG(Direto ou Canal)
         elif texto.startswith('PRIVMSG'):
             partes = texto.split(' ', 2)
             if len(partes) >= 3:
@@ -75,7 +75,7 @@ def dados_recebidos(conexao, dados):
                 destinatario_lower = destinatario.lower()
                 remetente = getattr(conexao, 'apelido', '*')
 
-                # 1. Envio para CANAL (#)
+                #1. Envio para CANAL (#)
                 if destinatario.startswith('#'):
                     if destinatario_lower in CANAIS:
                         resposta = f":{remetente} PRIVMSG {destinatario} {mensagem}\r\n"
@@ -84,13 +84,13 @@ def dados_recebidos(conexao, dados):
                             if membro != conexao:
                                 membro.enviar(resposta.encode('utf-8'))
                 
-                # 2. Envio DIRETO para USUÁRIO
+                #2. Envio direto p/ USUÁRIO
                 elif destinatario_lower in USUARIOS:
                     conexao_destino = USUARIOS[destinatario_lower]
                     resposta = f":{remetente} PRIVMSG {destinatario} {mensagem}\r\n"
                     conexao_destino.enviar(resposta.encode('utf-8'))
 
-        # Passo 6: JOIN
+        #passo 6: JOIN
         elif texto.startswith('JOIN'):
             partes = texto.split(' ', 1)
             canal = partes[1] if len(partes) > 1 else ''
@@ -126,24 +126,57 @@ def dados_recebidos(conexao, dados):
                 
                 conexao.enviar(r_353.encode('utf-8'))
                 conexao.enviar(r_366.encode('utf-8'))
-      
+      #Passo 7 (Sair do canal)
+       elif texto.startswith('PART'):
+        partes = texto.split(' ', 1)
+        if len(partes) > 1:
+            canal = partes[1].split()[0]
+            canal_lower = canal.lower()
+            
+            if canal_lower in CANAIS and conexao in CANAIS[canal_lower]:
+                apelido = getattr(conexao, 'apelido', '*')
+                msg_part = f":{apelido} PART {canal}\r\n"
+                
+                # Transmite para todos os membros do canal
+                for membro in list(CANAIS[canal_lower]):
+                    membro.enviar(msg_part.encode('utf-8'))
+                
+                # Remove a conexão do canal
+                CANAIS[canal_lower].remove(conexao)
+                if hasattr(conexao, 'canais') and canal_lower in conexao.canais:
+                    conexao.canais.remove(canal_lower)
+
+def conexao_fechada(conexao):
+    print(conexao, 'conexão fechada')
+    
+    apelido = getattr(conexao, 'apelido', None)
+    membros_notificar = set()
+
+    # Passo 10: Remover o usuário de todos os canais
+    for canal_lower, membros in list(CANAIS.items()):
+        if conexao in membros:
+            membros.remove(conexao)
+            membros_notificar.update(membros)
+
+    # Passo 8: Notificar QUIT aos usuários em canais em comum
+    if apelido:
+        msg_quit = f":{apelido} QUIT :Connection closed\r\n"
+        for membro in membros_notificar:
+            membro.enviar(msg_quit.encode('utf-8'))
+
+        # Passo 10: Remover apelido do dicionário global
+        apelido_lower = apelido.lower()
+        if apelido_lower in USUARIOS and USUARIOS[apelido_lower] == conexao:
+            del USUARIOS[apelido_lower]
+
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
 
-    # Note que, no Python, atributos NÃO precisam ser previamente declarados na classe!
-    # Se precisar, esta função é o melhor local para adicionar novos atributos ao objeto conexao.
-    #
-    # Por exemplo, para armazenar o nick do usuário:
-    conexao.nick = b'*'
-
-    # Fique à vontade para adicionar mais atributos, se necessário.
-
     conexao.registrar_recebedor(dados_recebidos)
-
+    conexao.registrar_fechado(conexao_fechada)
 
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()
-
 
 loop.run_forever()
