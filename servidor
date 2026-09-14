@@ -6,6 +6,10 @@ from tcp import Servidor
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
+# Dicionário global para mapear apelido (em minúsculas) -> objeto conexao
+USUARIOS = {}
+
+
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
@@ -22,26 +26,47 @@ def dados_recebidos(conexao, dados):
         linha, conexao.buffer = conexao.buffer.split(b'\r\n', 1)
         texto = linha.decode('utf-8', errors='ignore').strip()
 
-        # Tratamento de PING (Passos 1 e 2)
+        # Passo 1 & 2: PING
         if texto.startswith('PING'):
             partes = texto.split(' ', 1)
             payload = partes[1] if len(partes) > 1 else ''
             resposta = f":server PONG server :{payload}\r\n"
             conexao.enviar(resposta.encode('utf-8'))
 
-        # Tratamento de NICK (Passo 3)
+        # Passo 4: NICK
         elif texto.startswith('NICK'):
             partes = texto.split(' ', 1)
             apelido = partes[1] if len(partes) > 1 else ''
             
-            # Valida apelido em bytes
+            # Validação do formato
             if not validar_nome(apelido.encode('utf-8')):
-                resposta = f":server 432 * {apelido} :Erroneous nickname\r\n"
+                apelido_atual = getattr(conexao, 'apelido', '*')
+                resposta = f":server 432 {apelido_atual} {apelido} :Erroneous nickname\r\n"
                 conexao.enviar(resposta.encode('utf-8'))
             else:
-                resposta = f":server 001 {apelido} :Welcome\r\n:server 422 {apelido} :MOTD File is missing\r\n"
-                conexao.enviar(resposta.encode('utf-8'))
+                apelido_lower = apelido.lower()
+                apelido_antigo = getattr(conexao, 'apelido', None)
 
+                # Verifica se o apelido já está em uso por outro usuário
+                if apelido_lower in USUARIOS and USUARIOS[apelido_lower] != conexao:
+                    apelido_atual = apelido_antigo if apelido_antigo else '*'
+                    resposta = f":server 433 {apelido_atual} {apelido} :Nickname is already in use\r\n"
+                    conexao.enviar(resposta.encode('utf-8'))
+                else:
+                    # Se já tinha apelido registrado, remove a chave antiga do dicionário
+                    if apelido_antigo:
+                        del USUARIOS[apelido_antigo.lower()]
+                        resposta = f":{apelido_antigo} NICK {apelido}\r\n"
+                        conexao.enviar(resposta.encode('utf-8'))
+                    else:
+                        # Primeiro registro do usuário
+                        resposta = f":server 001 {apelido} :Welcome\r\n:server 422 {apelido} :MOTD File is missing\r\n"
+                        conexao.enviar(resposta.encode('utf-8'))
+
+                    # Atualiza o novo apelido na conexão e no dicionário global
+                    conexao.apelido = apelido
+                    USUARIOS[apelido_lower] = conexao
+                    
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
 
