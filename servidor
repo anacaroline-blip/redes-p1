@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
 import asyncio
-
+import re
+from tcp import Servidor
+# Garante o event loop no Python 3.14+
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-from tcp import Servidor
-import re
-
-
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
-
-
-def sair(conexao):
-    print(conexao, 'conexão fechada')
-    conexao.fechar()
 
 def dados_recebidos(conexao, dados):
     if not dados:
@@ -29,19 +22,19 @@ def dados_recebidos(conexao, dados):
         linha, conexao.buffer = conexao.buffer.split(b'\r\n', 1)
         texto = linha.decode('utf-8', errors='ignore').strip()
 
-        # Passo 1 & 2: PING
+        # Tratamento de PING (Passos 1 e 2)
         if texto.startswith('PING'):
             partes = texto.split(' ', 1)
             payload = partes[1] if len(partes) > 1 else ''
             resposta = f":server PONG server :{payload}\r\n"
             conexao.enviar(resposta.encode('utf-8'))
 
-        # Passo 3: NICK
+        # Tratamento de NICK (Passo 3)
         elif texto.startswith('NICK'):
             partes = texto.split(' ', 1)
             apelido = partes[1] if len(partes) > 1 else ''
             
-            # Valida o apelido como bytes
+            # Valida apelido em bytes
             if not validar_nome(apelido.encode('utf-8')):
                 resposta = f":server 432 * {apelido} :Erroneous nickname\r\n"
                 conexao.enviar(resposta.encode('utf-8'))
